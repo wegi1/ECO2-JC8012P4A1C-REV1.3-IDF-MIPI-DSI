@@ -41,6 +41,14 @@ Create a plain text file named "prefs.ini" inside the FOTOS folder containing tw
 To guarantee native, hardware-level fluidness of the MIPI-DSI bus, eliminate frame tearing, and maintain strict timing for the `vTaskHardwareTouchDriver` background task, **the entire project must be compiled using the `-Og` mode** (Optimization for Debugging) via menuconfig. This mode ensures stable interrupt handling and keeps the rendering engine perfectly synchronized with the display's vertical sync (VSYNC) interrupts.
 
 ---
+## Key Features
+
+* **High-Speed MIPI-DSI Display & Hardware VSYNC:** Smooth, tear-free rendering driven by the ESP32-P4 MIPI-DSI interface with VSYNC semaphore synchronization and DMA cache management (`esp_cache_msync`).
+* **Real-Time 3D Vector Dots Engine:** Interactive 3D wireframe/point-cloud sphere animation (`vectordotsball`) rendered smoothly on the MIPI-DSI framebuffer.
+* **Dynamic TrueType Font Rendering:** Crisp, anti-aliased vector typography (`stb_truetype`) rendered dynamically at arbitrary font sizes across the clock face and settings screens.
+* **Built-in SoftAP & HTTP Wi-Fi Setup Portal:** Zero-hardcode Wi-Fi configuration via an embedded HTTP server (`http://192.168.4.1`). Tap **WiFi** in the touch menu, connect to **`ESP32-CLOCK-SETUP`** from any phone or PC, and save credentials directly to SPIFFS (`/spiffs/prefs.ini`).
+* **Automatic NTP Time Synchronization:** Non-blocking background time sync via the onboard ESP32-C6 co-processor (`esp_wifi_remote` / `esp_hosted` over SDIO) with automatic CET/CEST daylight saving time support.
+* **Software JPEG Decoding & PWM Backlight Control:** Built-in support for `esp_new_jpeg` graphics decoding, GT911 capacitive touch input, and smooth PWM backlight dimming/wake-up.
 
 ## 🇵🇱 Wersja Polska
 
@@ -83,3 +91,12 @@ po kompilacji i sflaszowaniu zakomentuj tą linię krzyżykiem: #spiffs_create_p
 
 #### ⚙️ Zalecenia dotyczące optymalizacji kompilacji
 Dla zapewnienia idealnej, sprzętowej płynności magistrali MIPI-DSI, braku szarpania klatek oraz stabilnego timingu wątku sprzętowego dotyku `vTaskHardwareTouchDriver`, **cały projekt należy kompilować w trybie `-Og`** (Optimization for Debugging) w menuconfig. Tryb ten zapewnia wzorcową stabilność obsługi przerw oraz pełną synchronizację renderera z przerwaniami pionowymi wyświetlacza (VSYNC).
+
+## Główne funkcje (Key Features)
+
+* **Szybki wyświetlacz MIPI-DSI i sprzętowy VSYNC:** Płynne renderowanie obrazu bez efektu rozrywania klatek (tearingu) przez interfejs MIPI-DSI układu ESP32-P4 z synchronizacją semaforem VSYNC i zarządzaniem pamięcią podręczną DMA (`esp_cache_msync`).
+* **Silnik 3D Vector Dots w czasie rzeczywistym:** Płynna animacja obracającej się sfery 3D złożonej z punktów wektorowych (`vectordotsball`) renderowana bezpośrednio w buforze ramki MIPI-DSI.
+* **Dynamiczne renderowanie czcionek TrueType:** Ostra, wygładzana typografia wektorowa (`stb_truetype`) generowana w locie w dowolnym rozmiarze na tarczy zegara oraz w ekranach ustawień.
+* **Wbudowany portal konfiguracyjny SoftAP i serwer HTTP:** Konfiguracja Wi-Fi bez wpisywania haseł w kodzie źródłowym, przez wbudowany serwer WWW (`http://192.168.4.1`). Wystarczy dotknąć **WiFi** w menu, połączyć się z siecią **`ESP32-CLOCK-SETUP`** z telefonu lub komputera i zapisać dane w pamięci SPIFFS (`/spiffs/prefs.ini`).
+* **Automatyczna synchronizacja czasu NTP:** Pobieranie aktualnego czasu w tle przez koprocesor ESP32-C6 (`esp_wifi_remote` / `esp_hosted` po SDIO) z automatyczną obsługą zmiany czasu letniego i zimowego (CET/CEST).
+* **Programowe dekodowanie JPEG i sterowanie podświetleniem PWM:** Obsługa dekodera `esp_new_jpeg`, pojemnościowego panelu dotykowego GT911 oraz wygaszania i wybudzania podświetlenia ekranu przez PWM.

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 #include <esp_timer.h>
+#include <sys/stat.h>
 
 // Naglowki FreeRTOS oraz ESP-IDF
 #include "freertos/FreeRTOS.h"
@@ -81,6 +82,11 @@ volatile bool ntp_read = false;
 //=====================================================================================================
 //=====================================================================================================
 //=====================================================================================================
+static bool is_slideshow_disabled(void)
+{
+    struct stat st;
+    return (stat("/spiffs/NOSLIDE.TXT", &st) == 0 || stat("/spiffs/noslide.txt", &st) == 0);
+}
 // ==========================================
 // CZĘŚĆ 2 Z 3: ZADANIE FREE_RTOS I INICJALIZACJA
 // ==========================================
@@ -296,23 +302,33 @@ void vTaskTouch(void *pvParameters)
         // Wyzwalanie pokazu zdjęcia co 5 minut (g_trigger_auto_photo jest ustawiany w vTaskAutoPhotoTimer)
         if (g_trigger_auto_photo == true)
         {
+            if (is_slideshow_disabled())
+            {
+                g_trigger_auto_photo = false;
+                continue;
+            }
             printf("[TOUCH] Przechwycono sygnal auto-foto! Blokuje czas i skacze do wyswietlarki...\n");
             is_editing_time = true;
-
-            if (PHOTO_NR == 0)
+            uint16_t tx = 0, ty = 0;
+            bool aborted = false;
+            wyswietl_jpeg_ze_spiffs(PHOTO_NR == 0 ? "/spiffs/FOTO1.jpg" : "/spiffs/FOTO2.jpg");
+            for (int i = 0; i < 480; i++)
             {
-                wyswietl_jpeg_ze_spiffs("/spiffs/FOTO1.jpg");
+                if (touch.getTouch(&tx, &ty))
+                {
+                    aborted = true;
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(25));
             }
-            else
-            {
-                wyswietl_jpeg_ze_spiffs("/spiffs/FOTO2.jpg");
-            }
-            vTaskDelay(pdMS_TO_TICKS(12 * 1000)); // 12 sec.
-
+            while (touch.getTouch(&tx, &ty))
+                vTaskDelay(pdMS_TO_TICKS(20));
             for (int t = BRIGHTNESS; t >= 0; t--)
             {
+                if (!aborted && touch.getTouch(&tx, &ty))
+                    aborted = true;
                 set_brightness(uint8_t(t));
-                vTaskDelay(pdMS_TO_TICKS(50));
+                vTaskDelay(pdMS_TO_TICKS(aborted ? 5 : 40));
             }
             xSemaphoreTake(fb_mutex, portMAX_DELAY);
             safe_clear_screen((uint16_t *)fbs[0], 0x0000);
@@ -320,20 +336,22 @@ void vTaskTouch(void *pvParameters)
             xSemaphoreTake(vsync_sem, portMAX_DELAY);
             lcd.lcd_draw_bitmap(0, 0, LCD_H_RES, LCD_V_RES, (uint8_t *)fbs[0]);
             xSemaphoreGive(fb_mutex);
-
             old_seconds = 111;
-            PHOTO_NR = PHOTO_NR ^ 1; // Przełączanie między FOTO1 a FOTO2 (0 <-> 1)
-            g_trigger_auto_photo = false;
-            is_editing_time = false;
-            printf("[TOUCH] Pokaz zakonczony, wracam do zegara glownego.\n");
-            vTaskDelay(pdMS_TO_TICKS(250));
+            PHOTO_NR = PHOTO_NR ^ 1;
 
+            g_trigger_auto_photo = false;
+            while (touch.getTouch(&tx, &ty))
+                vTaskDelay(pdMS_TO_TICKS(20));
+            vTaskDelay(pdMS_TO_TICKS(150));
+            touch.getTouch(&tx, &ty);
+            is_editing_time = false;
             for (int t = 0; t <= BRIGHTNESS; t++)
             {
-                set_brightness((uint8_t)t);
-                vTaskDelay(pdMS_TO_TICKS(50));
+                set_brightness(uint8_t(t));
+                vTaskDelay(pdMS_TO_TICKS(25));
             }
         }
+
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -370,20 +388,41 @@ void init_RTC_subsystem(void)
     // TESTOWE WYŚWIETLENIE PIERWSZEGO ZDJĘCIA (Zaraz po starcie na chwilę pokaże FOTO1.jpg!)
     // Wygaszamy ekran na start, zanim pokażemy zdjęcie
     set_brightness(0);
-
-    wyswietl_jpeg_ze_spiffs("/spiffs/FOTO1.jpg");
-    for (int t = 0; t <= 100; t++)
+    if (!is_slideshow_disabled())
     {
-        set_brightness(uint8_t(t));
-        vTaskDelay(pdMS_TO_TICKS(20));
+        uint16_t tx = 0, ty = 0;
+        bool aborted = false;
+        wyswietl_jpeg_ze_spiffs("/spiffs/FOTO1.jpg");
+        for (int t = 0; t <= 100; t++)
+        {
+            set_brightness(uint8_t(t));
+            if (touch.getTouch(&tx, &ty))
+            {
+                aborted = true;
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(15));
+        }
+        for (int i = 0; !aborted && i < 200; i++)
+        {
+            if (touch.getTouch(&tx, &ty))
+            {
+                aborted = true;
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(25));
+        }
+        while (touch.getTouch(&tx, &ty))
+            vTaskDelay(pdMS_TO_TICKS(20));
+        for (int t = 100; t >= 0; t--)
+        {
+            if (!aborted && touch.getTouch(&tx, &ty))
+                aborted = true;
+            set_brightness(uint8_t(t));
+            vTaskDelay(pdMS_TO_TICKS(aborted ? 5 : 40));
+        }
     }
-    vTaskDelay(pdMS_TO_TICKS(5000)); // Pokazuj zdjęcie przez 3 sekundy, zanim wystartuje główny zegar!
 
-    for (int t = 100; t >= 0; t--)
-    {
-        set_brightness(uint8_t(t));
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
     safe_clear_screen(fbs[0], 0x0000);
     esp_cache_msync((void *)fbs[0], BUFFER_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
     xSemaphoreTake(vsync_sem, portMAX_DELAY);
@@ -1258,6 +1297,7 @@ void vTaskAutoPhotoTimer(void *pvParameters)
     while (1)
     {
         vTaskDelay(pdMS_TO_TICKS(5 * 60 * 1000));
+        // vTaskDelay(pdMS_TO_TICKS(15 * 1000));
         g_trigger_auto_photo = true;
         printf("[TIMER] Minelo 5 minut! Wyzwalam pokaz zdjecia.\n");
     }
