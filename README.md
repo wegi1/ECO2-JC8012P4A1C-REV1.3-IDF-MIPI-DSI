@@ -49,7 +49,10 @@ To guarantee native, hardware-level fluidness of the MIPI-DSI bus, eliminate fra
 * **Built-in SoftAP & HTTP Wi-Fi Setup Portal:** Zero-hardcode Wi-Fi configuration via an embedded HTTP server (`http://192.168.4.1`). Tap **WiFi** in the touch menu, connect to **`ESP32-CLOCK-SETUP`** from any phone or PC, and save credentials directly to SPIFFS (`/spiffs/prefs.ini`).
 * **Automatic NTP Time Synchronization:** Non-blocking background time sync via the onboard ESP32-C6 co-processor (`esp_wifi_remote` / `esp_hosted` over SDIO) with automatic CET/CEST daylight saving time support.
 * **Software JPEG Decoding & PWM Backlight Control:** Built-in support for `esp_new_jpeg` graphics decoding, GT911 capacitive touch input, and smooth PWM backlight dimming/wake-up.
+* **SPIFFS Resource Management (`FOTOS`):** Dedicated SPIFFS storage for slideshow images (`FOTO1.jpg`, `FOTO2.jpg`), Wi-Fi credentials (`prefs.ini`), and weather location coordinates (`weather.ini`). Detailed setup instructions are available in the [FOTOS/README.md](FOTOS/README.md) file.
+* **Test PAINT Application:** Added a built-in test **PAINT** drawing application to showcase touch responsiveness and smooth rendering on the display.
 
+---
 ## 🇵🇱 Wersja Polska
 
 Niskopoziomowy, wysoko zoptymalizowany system operacyjny zegara wektorowego, renderowania grafiki TrueType oraz automatycznej i ręcznej synchronizacji czasu NTP dla układu ESP32-P4 z wyświetlaczem MIPI-DSI 800x1280 (Portrait). Sieć i zadania koprocesora są obsługiwane przez układ ESP32-C6 za pośrednictwem szybkiej magistrali sprzętowej SDIO.
@@ -100,3 +103,7 @@ Dla zapewnienia idealnej, sprzętowej płynności magistrali MIPI-DSI, braku sza
 * **Wbudowany portal konfiguracyjny SoftAP i serwer HTTP:** Konfiguracja Wi-Fi bez wpisywania haseł w kodzie źródłowym, przez wbudowany serwer WWW (`http://192.168.4.1`). Wystarczy dotknąć **WiFi** w menu, połączyć się z siecią **`ESP32-CLOCK-SETUP`** z telefonu lub komputera i zapisać dane w pamięci SPIFFS (`/spiffs/prefs.ini`).
 * **Automatyczna synchronizacja czasu NTP:** Pobieranie aktualnego czasu w tle przez koprocesor ESP32-C6 (`esp_wifi_remote` / `esp_hosted` po SDIO) z automatyczną obsługą zmiany czasu letniego i zimowego (CET/CEST).
 * **Programowe dekodowanie JPEG i sterowanie podświetleniem PWM:** Obsługa dekodera `esp_new_jpeg`, pojemnościowego panelu dotykowego GT911 oraz wygaszania i wybudzania podświetlenia ekranu przez PWM.
+* **Zarządzanie zasobami SPIFFS (`FOTOS`):** Dedykowana partycja SPIFFS przechowująca zdjęcia pokazu slajdów (`FOTO1.jpg`, `FOTO2.jpg`), dane sieci Wi-Fi (`prefs.ini`) oraz współrzędne lokalizacji dla pogody (`weather.ini`). Szczegółowa instrukcja konfiguracji znajduje się w pliku [FOTOS/README.md](FOTOS/README.md).
+* **Testowa aplikacja PAINT:** Dodano wbudowaną testową aplikację do rysowania **PAINT**, demonstrującą responsywność ekranu dotykowego oraz płynność renderowania obrazu.
+
+---
