@@ -32,6 +32,7 @@
 //============================================================================================================
 //============================================================================================================
 //============================================================================================================
+extern uint16_t *back_buffer;
 
 // Wymuszenie dla kompilatora C++, aby traktował plik producenta jako kod C++ / C kompatybilny
 extern "C"
@@ -158,6 +159,7 @@ extern "C" void app_main(void)
     // Alokacja dwóch buforów w PSRAM z wyrównaniem do linii Cache (64 bajty)
     size_t buffer_size = LCD_H_RES * LCD_V_RES * 3; // + 1MB for jpeg decoding buffer
     fbs[0] = (uint16_t *)heap_caps_aligned_alloc(64, buffer_size, MALLOC_CAP_SPIRAM);
+    back_buffer = (uint16_t *)fbs[0];
 
     printf("[MEM_2] Po alokacji fbs[0] (Twoje 2MB pobrane): %u KB wolnego\n", heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
 

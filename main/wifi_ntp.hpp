@@ -9,3 +9,7 @@ void start_ntp_sync_task_async(void);
 // Zwraca true, jeśli aktualnie trwa łączenie z Wi-Fi / NTP
 bool is_ntp_sync_running(void);
 bool ensure_wifi_stack_initialized(void);
+
+// Nowe funkcje dla pogody Open-Meteo:
+bool fetch_weather_temperature(float *out_temp);
+bool is_weather_fetch_running(void);

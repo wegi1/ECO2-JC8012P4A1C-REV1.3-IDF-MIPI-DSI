@@ -14,6 +14,9 @@
 #include "esp_sntp.h"
 #include "esp_heap_caps.h"
 #include "esp_mac.h"
+#include <stdlib.h>
+#include "esp_http_client.h"
+#include "wifi_portal.hpp"
 
 extern "C"
 {
@@ -23,6 +26,8 @@ extern "C"
 // Deklaracja Twojej istniejącej funkcji z main.cpp
 extern void sync_internal_rtc_with_rx8025t(void);
 extern volatile bool ntp_read;
+extern volatile bool temp_read;
+
 static const char *TAG = "WIFI_NTP";
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -31,6 +36,13 @@ static const char *TAG = "WIFI_NTP";
 static EventGroupHandle_t s_wifi_event_group = NULL;
 static bool s_wifi_stack_initialized = false;
 static volatile bool s_sync_in_progress = false;
+static volatile bool s_weather_in_progress = false;
+
+bool is_weather_fetch_running(void)
+{
+    return s_weather_in_progress;
+}
+
 static int s_retry_num = 0;
 static const int MAX_RETRY = 3;
 
@@ -134,7 +146,6 @@ void vTaskNtpSyncWorker(void *pvParameters)
 
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-
     if (esp_wifi_start() == ESP_OK)
     {
         print_sram_debug("PO ESP_WIFI_START");
@@ -150,22 +161,50 @@ void vTaskNtpSyncWorker(void *pvParameters)
         if (bits & WIFI_CONNECTED_BIT)
         {
             ESP_LOGI(TAG, "Polaczono z Wi-Fi! Pobieram czas z NTP...");
-            s_sntp_synced = false;
-            esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-            esp_sntp_setservername(0, "pl.pool.ntp.org");
-            esp_sntp_setservername(1, "time.google.com");
-            sntp_set_time_sync_notification_cb(time_sync_notification_cb);
-            esp_sntp_init();
+            /********************************* */
+            esp_wifi_set_ps(WIFI_PS_NONE);
 
-            int sntp_wait = 0;
-            while (!s_sntp_synced && sntp_wait < 20)
+            const char *ntp_servers[5] = {
+                "tempus1.gum.gov.pl",
+                "time.google.com",
+                "time.cloudflare.com",
+                "pool.ntp.org",
+                "europe.pool.ntp.org"};
+
+            s_sntp_synced = false;
+            sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+
+            for (int attempt = 0; attempt < 5 && !s_sntp_synced; attempt++)
             {
-                vTaskDelay(pdMS_TO_TICKS(500));
-                sntp_wait++;
+                ESP_LOGI(TAG, "Proba NTP %d/5 -> serwer: %s", attempt + 1, ntp_servers[attempt]);
+
+                if (esp_sntp_enabled())
+                {
+                    esp_sntp_stop();
+                }
+
+                esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+                esp_sntp_setservername(0, ntp_servers[attempt]);
+                esp_sntp_init();
+
+                int sntp_wait = 0;
+                while (!s_sntp_synced && sntp_wait < 15)
+                {
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    sntp_wait++;
+                }
+
+                if (!s_sntp_synced)
+                {
+                    ESP_LOGW(TAG, "Brak odpowiedzi z %s (timeout 3s), przelaczam serwer...", ntp_servers[attempt]);
+                }
             }
 
-            esp_sntp_stop();
-
+            if (esp_sntp_enabled())
+            {
+                esp_sntp_stop();
+            }
+            /****************************************************************** */
             if (s_sntp_synced)
             {
 
@@ -228,6 +267,11 @@ void vTaskNtpSyncWorker(void *pvParameters)
 
 void start_ntp_sync_task_async(void)
 {
+    if (s_sync_in_progress || s_weather_in_progress || is_wifi_portal_active())
+    {
+        ESP_LOGW(TAG, "Radio Wi-Fi zajete (NTP / Pogoda / Portal) - pomijam NTP.");
+        return;
+    }
 
     if (s_sync_in_progress)
     {
@@ -285,4 +329,179 @@ bool ensure_wifi_stack_initialized(void)
         s_wifi_stack_initialized = true;
     }
     return true;
+}
+
+static char s_weather_rx_buf[1024];
+static int s_weather_rx_len = 0;
+
+static void load_weather_coords_from_spiffs(float *lat, float *lon)
+{
+    *lat = 53.12f; // Domyslny fallback: Bydgoszcz
+    *lon = 18.01f;
+
+    FILE *f = fopen("/spiffs/weather.ini", "r");
+    if (f == NULL)
+    {
+        ESP_LOGW(TAG, "Brak /spiffs/weather.ini - uzywam Bydgoszczy (53.12, 18.01)");
+        return;
+    }
+
+    char line[64];
+    while (fgets(line, sizeof(line), f) != NULL)
+    {
+        if (strncmp(line, "lat=", 4) == 0)
+        {
+            *lat = strtof(line + 4, NULL);
+        }
+        else if (strncmp(line, "lon=", 4) == 0)
+        {
+            *lon = strtof(line + 4, NULL);
+        }
+    }
+    fclose(f);
+    ESP_LOGI(TAG, "Wspolrzedne pogody: lat=%.4f, lon=%.4f", *lat, *lon);
+}
+
+static esp_err_t weather_http_event_handler(esp_http_client_event_t *evt)
+{
+    if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data_len > 0)
+    {
+        int space_left = (int)sizeof(s_weather_rx_buf) - 1 - s_weather_rx_len;
+        if (space_left > 0)
+        {
+            int to_copy = (evt->data_len < space_left) ? evt->data_len : space_left;
+            memcpy(s_weather_rx_buf + s_weather_rx_len, evt->data, to_copy);
+            s_weather_rx_len += to_copy;
+            s_weather_rx_buf[s_weather_rx_len] = '\0';
+        }
+    }
+    return ESP_OK;
+}
+// Tutaj zastąp HOST_API nazwą serwera Open-Meteo (api . open-meteo . com bez spacji)
+static const char *WEATHER_HOST = "api.open-meteo.com";
+
+bool fetch_weather_temperature(float *out_temp)
+{
+    temp_read = false;
+    if (out_temp == NULL)
+        return false;
+
+    if (s_sync_in_progress || s_weather_in_progress || is_wifi_portal_active())
+    {
+        ESP_LOGW(TAG, "Radio Wi-Fi zajete - pomijam pobieranie pogody.");
+        return false;
+    }
+
+    char ssid[33] = {0};
+    char pass[65] = {0};
+    if (!load_wifi_credentials_from_SPIFFS(ssid, sizeof(ssid), pass, sizeof(pass)))
+    {
+        ESP_LOGW(TAG, "Brak danych Wi-Fi w SPIFFS dla pogody.");
+        return false;
+    }
+
+    s_weather_in_progress = true;
+    bool ok = false;
+
+    float lat = 53.12f;
+    float lon = 18.01f;
+    load_weather_coords_from_spiffs(&lat, &lon);
+
+    if (!ensure_wifi_stack_initialized())
+    {
+        s_weather_in_progress = false;
+        return false;
+    }
+
+    if (s_wifi_event_group != NULL)
+    {
+        vEventGroupDelete(s_wifi_event_group);
+        s_wifi_event_group = NULL;
+    }
+    s_wifi_event_group = xEventGroupCreate();
+    s_retry_num = 0;
+
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_t instance_got_ip;
+
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id);
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip);
+
+    wifi_config_t wifi_config = {};
+    strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
+    wifi_config.sta.threshold.authmode = (strlen(pass) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    esp_wifi_start();
+    esp_wifi_connect();
+
+    EventBits_t bits = xEventGroupWaitBits(
+        s_wifi_event_group,
+        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+        pdFALSE,
+        pdFALSE,
+        pdMS_TO_TICKS(15000));
+
+    if (bits & WIFI_CONNECTED_BIT)
+    {
+        char path_buf[160];
+        snprintf(path_buf, sizeof(path_buf),
+                 "/v1/forecast?latitude=%.4f&longitude=%.4f&current_weather=true",
+                 lat, lon);
+
+        s_weather_rx_len = 0;
+        s_weather_rx_buf[0] = '\0';
+
+        esp_http_client_config_t cfg = {};
+        cfg.host = WEATHER_HOST;
+        cfg.path = path_buf;
+        cfg.transport_type = HTTP_TRANSPORT_OVER_TCP;
+        cfg.timeout_ms = 8000;
+        cfg.event_handler = weather_http_event_handler;
+
+        esp_http_client_handle_t client = esp_http_client_init(&cfg);
+        if (client != NULL)
+        {
+            if (esp_http_client_perform(client) == ESP_OK &&
+                esp_http_client_get_status_code(client) == 200)
+            {
+                const char *cw = strstr(s_weather_rx_buf, "\"current_weather\"");
+                if (cw != NULL)
+                {
+                    const char *tp = strstr(cw, "\"temperature\":");
+                    if (tp != NULL)
+                    {
+                        char *end_ptr = NULL;
+                        float parsed_val = strtof(tp + 14, &end_ptr);
+
+                        if (end_ptr != (tp + 14) && parsed_val > -60.0f && parsed_val < 65.0f)
+                        {
+                            *out_temp = parsed_val;
+                            temp_read = true;
+                            ok = true;
+                            ESP_LOGI(TAG, "Pobrano poprawna temperature: %.1f C", *out_temp);
+                        }
+                    }
+                }
+            }
+
+            esp_http_client_cleanup(client);
+        }
+    }
+
+    esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, instance_any_id);
+    esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, instance_got_ip);
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+
+    if (s_wifi_event_group != NULL)
+    {
+        vEventGroupDelete(s_wifi_event_group);
+        s_wifi_event_group = NULL;
+    }
+
+    s_weather_in_progress = false;
+    return ok;
 }

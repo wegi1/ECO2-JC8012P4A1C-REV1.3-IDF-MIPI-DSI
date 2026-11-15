@@ -50,3 +50,7 @@ void refresh_menu_self(void);
 void set_max_briggtness(void);
 void restore_brightness(void);
 void set_brightness(uint8_t dana);
+void run_paint_menu(void);
+void draw_brush_circle_90(uint16_t *buf, int cx, int cy, int r, uint16_t color);
+void draw_paint_toolbar_90(int sel_color_idx, int sel_size_idx);
+void flush_screen_vsync(void);
