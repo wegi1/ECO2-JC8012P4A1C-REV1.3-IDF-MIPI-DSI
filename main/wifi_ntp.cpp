@@ -27,6 +27,7 @@ extern "C"
 extern void sync_internal_rtc_with_rx8025t(void);
 extern volatile bool ntp_read;
 extern volatile bool temp_read;
+extern SemaphoreHandle_t i2c_mutex;
 
 static const char *TAG = "WIFI_NTP";
 
@@ -222,7 +223,14 @@ void vTaskNtpSyncWorker(void *pvParameters)
                 rtc_time.year = timeinfo.tm_year + 1900;
                 rtc_time.weekday = timeinfo.tm_wday;
 
-                if (rx8025t_set_time(&rtc_time) == ESP_OK)
+                esp_err_t set_res = ESP_FAIL;
+                if (i2c_mutex != NULL && xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                {
+                    set_res = rx8025t_set_time(&rtc_time);
+                    xSemaphoreGive(i2c_mutex);
+                }
+                if (set_res == ESP_OK)
+
                 {
                     sync_internal_rtc_with_rx8025t();
                     ntp_read = true;
@@ -428,8 +436,10 @@ bool fetch_weather_temperature(float *out_temp)
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip);
 
     wifi_config_t wifi_config = {};
-    strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
+    snprintf((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "%s", ssid);
+    snprintf((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), "%s", pass);
+    //  strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
+    //  strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
     wifi_config.sta.threshold.authmode = (strlen(pass) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
     esp_wifi_set_mode(WIFI_MODE_STA);

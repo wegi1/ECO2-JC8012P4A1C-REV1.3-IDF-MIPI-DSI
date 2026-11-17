@@ -29,11 +29,12 @@
 #include "RTC.hpp"
 #include "driver/i2c.h" // Potrzebne do konfiguracji magistrali
 #include "wifi_ntp.hpp" // Potrzebne do synchronizacji NTP
+#include "vectordotsball.hpp"
 //============================================================================================================
 //============================================================================================================
 //============================================================================================================
 extern uint16_t *back_buffer;
-
+SemaphoreHandle_t i2c_mutex = NULL;
 // Wymuszenie dla kompilatora C++, aby traktował plik producenta jako kod C++ / C kompatybilny
 extern "C"
 {
@@ -48,6 +49,7 @@ extern "C"
 //============================================================================================================
 //============================================================================================================
 extern volatile uint8_t BRIGHTNESS;
+extern volatile uint8_t BRIGHTNESS_NIGHT;
 //============================================================================================================
 //============================================================================================================
 //============================================================================================================
@@ -62,9 +64,13 @@ jd9365_lcd lcd(LCD_RST);
 gsl3680_touch touch(TP_I2C_SDA, TP_I2C_SCL, TP_RST, TP_INT);
 
 // DWA SPRZĘTOWE BUFORY DLA BEZKOPIOŁOWEGO PAGE FLIPPINGU
-uint16_t *fbs[1] = {NULL};
+uint16_t *fbs[2] = {NULL, NULL};
+uint8_t *jpg_scratch_buf = NULL;
+volatile uint8_t active_fb_idx = 0; // Na ekranie startuje fbs
+// A w app_main(), po pobraniu fbs i fbs:
 
 SemaphoreHandle_t vsync_sem = NULL;
+
 //============================================================================================================
 //============================================================================================================
 //============================================================================================================
@@ -128,8 +134,10 @@ void sync_internal_rtc_with_rx8025t(void)
 
 extern "C" void app_main(void)
 {
-    init_NVS_system();                       // Inicjalizacja flasha pod NVS
-    BRIGHTNESS = load_brightness_from_NVS(); // Wczytanie starej jasności
+    i2c_mutex = xSemaphoreCreateMutex();
+
+    init_NVS_system(); // Inicjalizacja flasha pod NVS
+    BRIGHTNESS = load_brightness_from_NVS(&BRIGHTNESS_NIGHT);
     // Polska strefa czasowa (automatyczna zmiana czasu letniego/zimowego)
     setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
     tzset();
@@ -157,9 +165,25 @@ extern "C" void app_main(void)
     esp_lcd_dpi_panel_register_event_callbacks(dpi_handle, &cbs, NULL);
 
     // Alokacja dwóch buforów w PSRAM z wyrównaniem do linii Cache (64 bajty)
-    size_t buffer_size = LCD_H_RES * LCD_V_RES * 3; // + 1MB for jpeg decoding buffer
-    fbs[0] = (uint16_t *)heap_caps_aligned_alloc(64, buffer_size, MALLOC_CAP_SPIRAM);
-    back_buffer = (uint16_t *)fbs[0];
+    // size_t buffer_size = LCD_H_RES * LCD_V_RES * 3; // + 1MB for jpeg decoding buffer
+    size_t buffer_size = LCD_H_RES * LCD_V_RES * 2;
+    jpg_scratch_buf = (uint8_t *)heap_caps_aligned_alloc(64, 1024 * 1024, MALLOC_CAP_SPIRAM);
+    if (jpg_scratch_buf == NULL)
+    {
+        printf("[CRITICAL ERROR] Brak pamieci PSRAM na bufor JPEG!\n");
+        return;
+    }
+
+    // Pobieramy adresy obu sprzętowych buforów utworzonych przez sterownik DPI:
+    esp_err_t fb_err = esp_lcd_dpi_panel_get_frame_buffer(dpi_handle, 2, (void **)&fbs[0], (void **)&fbs[1]);
+    if (fb_err != ESP_OK || fbs[0] == NULL || fbs[1] == NULL)
+    {
+        printf("[CRITICAL ERROR] Nie udalo sie pobrac buforow DPI! err=%d\n", fb_err);
+        return;
+    }
+
+    back_buffer = (uint16_t *)fbs[1 - active_fb_idx];
+    printf("[MEMORY] HW_FB0: %p, HW_FB1: %p\n", (void *)fbs[0], (void *)fbs[1]);
 
     printf("[MEM_2] Po alokacji fbs[0] (Twoje 2MB pobrane): %u KB wolnego\n", heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
 
@@ -200,7 +224,6 @@ extern "C" void app_main(void)
     //============================================================================================================
     rx8025t_init();
     sync_internal_rtc_with_rx8025t(); // <<< WYWOŁUJEMY RAZ PO RESECIE
-
     print_internal_ram_stats("PRZED INICJALIZACJĄ ZADAŃ RTC [init_RTC_subsystem();]");
     //============================================================================================================
     init_RTC_subsystem();
@@ -211,4 +234,8 @@ extern "C" void app_main(void)
         print_RTC();
         vTaskDelay(pdMS_TO_TICKS(100));
     }
+}
+void nothing_to_do(void)
+{
+    printf("nothing TODO!");
 }

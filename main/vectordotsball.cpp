@@ -18,16 +18,19 @@
 //==========================================================
 // Zasoby zdefiniowane w main.cpp
 extern jd9365_lcd lcd;
-extern uint16_t *fbs[1];
+extern uint16_t *fbs[2];
 extern SemaphoreHandle_t vsync_sem;
 
 // Zasoby zdefiniowane w RTC.cpp
 extern volatile bool global_is_touched;
+extern volatile bool demo_exit_requested;
+
 extern void wait_for_release(void);
 extern void refresh_menu_self(void);
 extern void set_max_briggtness(void);
 extern void restore_brightness(void);
 extern SemaphoreHandle_t fb_mutex;
+extern volatile uint8_t active_fb_idx;
 
 //====================
 extern volatile uint8_t BRIGHTNESS;
@@ -154,8 +157,7 @@ void start_vectordots_ball(void)
 {
     xSemaphoreTake(fb_mutex, portMAX_DELAY);
     FRAME_ADDRESS = (uint32_t)fbs[0];
-    void *buf2_ptr = heap_caps_aligned_alloc(64, 800 * 1280 * 2, MALLOC_CAP_SPIRAM);
-    FRAME_2_ADDRESS = (uint32_t)buf2_ptr;
+    FRAME_2_ADDRESS = (uint32_t)fbs[1];
 
     if (multable == nullptr)
     {
@@ -175,6 +177,7 @@ void start_vectordots_ball(void)
 
     set_max_briggtness();
     global_is_touched = false;
+    demo_exit_requested = false;
 
     // clear both framebuffers
     for (i = 0; i < (800 * 1280 / 2); i++)
@@ -214,27 +217,27 @@ void start_vectordots_ball(void)
             esp_cache_msync((void *)(plots02[i] & ~63U), 64, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
         }
 
-        if (global_is_touched == true)
+        if (demo_exit_requested == true)
         {
             for (i = 0; i < (800 * 1280 / 2); i++)
             {
-                pFBaddr[i] = 0; // fill SDRAM layer buffors as black color
+                pFBaddr[i] = 0; // czyścimy pierwszy bufor fbs na czarno
             }
-
-            vTaskDelay(pdMS_TO_TICKS(20));
-            free(buf2_ptr);
-
+            esp_cache_msync((void *)FRAME_ADDRESS, 800 * 1280 * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+            xSemaphoreTake(vsync_sem, portMAX_DELAY);
+            lcd.lcd_draw_bitmap(0, 0, 800, 1280, (uint8_t *)FRAME_ADDRESS);
+            xSemaphoreTake(vsync_sem, portMAX_DELAY);
             wait_for_release();
             restore_brightness();
+            active_fb_idx = 0;
+
             xSemaphoreGive(fb_mutex);
             refresh_menu_self();
-
             return;
         }
-        // esp_cache_msync((void *)FRAME_2_ADDRESS, 800 * 1280 * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-        xSemaphoreTake(vsync_sem, portMAX_DELAY);
-        lcd.lcd_draw_bitmap(0, 0, 800, 1280, (uint8_t *)FRAME_2_ADDRESS);
 
+        lcd.lcd_draw_bitmap(0, 0, 800, 1280, (uint8_t *)FRAME_2_ADDRESS);
+        xSemaphoreTake(vsync_sem, portMAX_DELAY);
         //---
         zoom_manage();
         //---
@@ -256,9 +259,9 @@ void start_vectordots_ball(void)
             *(uint16_t *)(plots01[i]) = 0xFFFF;
             esp_cache_msync((void *)(plots01[i] & ~63U), 64, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
         }
-        // esp_cache_msync((void *)FRAME_ADDRESS, 800 * 1280 * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-        xSemaphoreTake(vsync_sem, portMAX_DELAY);
+
         lcd.lcd_draw_bitmap(0, 0, 800, 1280, (uint8_t *)FRAME_ADDRESS);
+        xSemaphoreTake(vsync_sem, portMAX_DELAY);
         // fps_counter += 2; // bo w jednym obiegu while rysujesz 2 klatki
         // if (fps_counter >= 120)
         // {
