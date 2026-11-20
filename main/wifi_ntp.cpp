@@ -45,7 +45,7 @@ bool is_weather_fetch_running(void)
 }
 
 static int s_retry_num = 0;
-static const int MAX_RETRY = 3;
+static const int MAX_RETRY = 5;
 
 static void print_sram_debug(const char *etap)
 {
@@ -173,7 +173,7 @@ void vTaskNtpSyncWorker(void *pvParameters)
                 "europe.pool.ntp.org"};
 
             s_sntp_synced = false;
-            sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+            // sntp_set_time_sync_notification_cb(time_sync_notification_cb);
 
             for (int attempt = 0; attempt < 5 && !s_sntp_synced; attempt++)
             {
@@ -186,10 +186,11 @@ void vTaskNtpSyncWorker(void *pvParameters)
 
                 esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
                 esp_sntp_setservername(0, ntp_servers[attempt]);
+                sntp_set_time_sync_notification_cb(time_sync_notification_cb);
                 esp_sntp_init();
 
                 int sntp_wait = 0;
-                while (!s_sntp_synced && sntp_wait < 15)
+                while (!s_sntp_synced && sntp_wait < 25)
                 {
                     vTaskDelay(pdMS_TO_TICKS(200));
                     sntp_wait++;
@@ -436,10 +437,13 @@ bool fetch_weather_temperature(float *out_temp)
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip);
 
     wifi_config_t wifi_config = {};
-    snprintf((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "%s", ssid);
-    snprintf((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), "%s", pass);
-    //  strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
-    //  strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
+    // snprintf((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "%s", ssid);
+    // snprintf((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), "%s", pass);
+    strlcpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid));
+    strlcpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password));
+
+    // strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
+    // strncpy((char *)wifi_config.sta.password, pass, sizeof(wifi_config.sta.password) - 1);
     wifi_config.sta.threshold.authmode = (strlen(pass) > 0) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
     esp_wifi_set_mode(WIFI_MODE_STA);

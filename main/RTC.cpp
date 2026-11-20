@@ -92,14 +92,16 @@ volatile bool ntp_read = false;
 volatile float g_outdoor_temp = -999.0f;
 volatile bool temp_read = false;
 
+// Ustawienia pokazu slajdów (domyślne)
+bool g_slide_enabled = true;
+uint8_t g_slide_interval = 5;    // 5, 10, 15, 20, 30, 60 min
+uint8_t g_slide_photo_count = 2; // Ile zdjęć brać do rotacji (1..max)
+static const uint8_t SLIDE_INTERVALS[] = {5, 10, 15, 20, 30, 60};
+static const int SLIDE_INTERVALS_COUNT = 6;
+
 //=====================================================================================================
 //=====================================================================================================
 //=====================================================================================================
-static bool is_slideshow_disabled(void)
-{
-    struct stat st;
-    return (stat("/spiffs/NOSLIDE.TXT", &st) == 0 || stat("/spiffs/noslide.txt", &st) == 0);
-}
 // ==========================================
 // CZĘŚĆ 2 Z 3: ZADANIE FREE_RTOS I INICJALIZACJA
 // ==========================================
@@ -140,6 +142,8 @@ void vTaskDisableColon(void *pvParameters)
 void vTaskHardwareTouchDriver(void *pvParameters)
 {
     printf("[DRIVER] Niskopoziomowy wątek sprzętowy I2C (vTaskHardwareTouchDriver) uruchomiony.\n");
+    // Usypiamy go na starcie - obudzą go dopiero procedury menu jasności lub NTP
+    vTaskSuspend(NULL);
 
     while (1)
     {
@@ -148,6 +152,7 @@ void vTaskHardwareTouchDriver(void *pvParameters)
 
         // Bezpośrednie próbkowanie kontrolera dotyku na szynie I2C
         bool touched = false;
+
         if (i2c_mutex != NULL && xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
         {
             touched = touch.getTouch(&tx, &ty);
@@ -316,16 +321,32 @@ void vTaskTouch(void *pvParameters)
         // Wyzwalanie pokazu zdjęcia co 5 minut (g_trigger_auto_photo jest ustawiany w vTaskAutoPhotoTimer)
         if (g_trigger_auto_photo == true)
         {
-            if (is_slideshow_disabled())
+            if (!g_slide_enabled)
             {
                 g_trigger_auto_photo = false;
                 continue;
             }
             printf("[TOUCH] Przechwycono sygnal auto-foto! Blokuje czas i skacze do wyswietlarki...\n");
             is_editing_time = true;
+            time_t now_photo = time(NULL);
+            struct tm tm_photo;
+            localtime_r(&now_photo, &tm_photo);
+            uint8_t target_br = (tm_photo.tm_hour >= 20 || tm_photo.tm_hour < 6) ? BRIGHTNESS_NIGHT : BRIGHTNESS;
+
             uint16_t tx = 0, ty = 0;
             bool aborted = false;
-            wyswietl_jpeg_ze_spiffs(PHOTO_NR == 0 ? "/spiffs/FOTO1.jpg" : "/spiffs/FOTO2.jpg");
+            char photo_path[32];
+            int photo_idx = (PHOTO_NR % g_slide_photo_count) + 1;
+            snprintf(photo_path, sizeof(photo_path), "/spiffs/FOTO%d.jpg", photo_idx);
+            struct stat st_photo;
+            if (stat(photo_path, &st_photo) != 0)
+            {
+                PHOTO_NR = 0;
+                snprintf(photo_path, sizeof(photo_path), "/spiffs/FOTO1.jpg");
+            }
+            wyswietl_jpeg_ze_spiffs(photo_path);
+            PHOTO_NR = (PHOTO_NR + 1) % g_slide_photo_count;
+
             for (int i = 0; i < 480; i++)
             {
                 if (touch.getTouch(&tx, &ty))
@@ -337,7 +358,7 @@ void vTaskTouch(void *pvParameters)
             }
             while (touch.getTouch(&tx, &ty))
                 vTaskDelay(pdMS_TO_TICKS(20));
-            for (int t = BRIGHTNESS; t >= 0; t--)
+            for (int t = target_br; t >= 0; t--)
             {
                 if (!aborted && touch.getTouch(&tx, &ty))
                     aborted = true;
@@ -349,7 +370,6 @@ void vTaskTouch(void *pvParameters)
             flush_screen_vsync();
             xSemaphoreGive(fb_mutex);
             old_seconds = 111;
-            PHOTO_NR = PHOTO_NR ^ 1;
 
             g_trigger_auto_photo = false;
             while (touch.getTouch(&tx, &ty))
@@ -357,11 +377,12 @@ void vTaskTouch(void *pvParameters)
             vTaskDelay(pdMS_TO_TICKS(150));
             touch.getTouch(&tx, &ty);
             is_editing_time = false;
-            for (int t = 0; t <= BRIGHTNESS; t++)
+            for (int t = 0; t <= target_br; t++)
             {
                 set_brightness(uint8_t(t));
                 vTaskDelay(pdMS_TO_TICKS(25));
             }
+            apply_scheduled_brightness(tm_photo.tm_hour, true);
         }
 
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -374,8 +395,13 @@ void vTaskWeather(void *pvParameters)
 {
     printf("[WEATHER] Zadanie pogodowe wystartowalo na rdzeniu %d.\n", xPortGetCoreID());
 
-    // Czekamy 18 sekund po starcie, aby pierwsze NTP po resecie zdazylo skonczyc
-    vTaskDelay(pdMS_TO_TICKS(18000));
+    // Dajemy 3 sekundy na start zadania NTP, a potem grzecznie czekamy, az NTP skonczy!
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    while (is_ntp_sync_running())
+    {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000)); // 1s oddechu po zamknieciu Wi-Fi przez NTP
 
     while (1)
     {
@@ -411,12 +437,8 @@ void init_RTC_subsystem(void)
     char test_ssid[33] = {0};
     char test_pass[65] = {0};
     // Tworzenie wątku na rdzeniu 1 (peryferyjnym)
-    xTaskCreatePinnedToCore(vTaskHardwareTouchDriver, "vTaskHwTouch", 4096, NULL, 3, &hTaskHardwareTouchDriver, 1);
-    // Usypiamy go na starcie - obudzą go dopiero procedury menu jasności lub NTP
-    if (hTaskHardwareTouchDriver != NULL)
-    {
-        vTaskSuspend(hTaskHardwareTouchDriver);
-    }
+    xTaskCreatePinnedToCore(vTaskHardwareTouchDriver, "vTaskHwTouch", 8192, NULL, 3, &hTaskHardwareTouchDriver, 1);
+
     // NOWOŚĆ: Montujemy dysk zanim ruszą zadania FreeRTOS
     // tu jest plik z danymi dla WiFi
     init_spiffs_storage();
@@ -434,8 +456,9 @@ void init_RTC_subsystem(void)
 
     // TESTOWE WYŚWIETLENIE PIERWSZEGO ZDJĘCIA (Zaraz po starcie na chwilę pokaże FOTO1.jpg!)
     // Wygaszamy ekran na start, zanim pokażemy zdjęcie
+    load_slide_settings_from_NVS();
     set_brightness(0);
-    if (!is_slideshow_disabled())
+    if (g_slide_enabled)
     {
         uint16_t tx = 0, ty = 0;
         bool aborted = false;
@@ -473,21 +496,17 @@ void init_RTC_subsystem(void)
     // --- TWARDE CZYSZCZENIE SPRZĘTOWEGO POTOKU PRZED MENU ---
     safe_clear_screen(back_buffer, 0x0000);
     flush_screen_vsync();
-    xSemaphoreGive(fb_mutex);
 
     vTaskDelay(pdMS_TO_TICKS(500));
     BRIGHTNESS = load_brightness_from_NVS(&BRIGHTNESS_NIGHT);
-
-    xTaskCreate(vTaskAutoPhotoTimer, "vTaskAutoPhoto", 2048, NULL, 2, NULL);
-    printf("[LOG] Podsystem RTC: Zadanie auto-foto 5-minutowe zarejestrowane.\n");
 
     // 1. Rejestracja zadania wygaszania dwukropka (Priorytet 5)
     xTaskCreate(vTaskDisableColon, "TaskDisableColon", 4096, NULL, 5, &hTaskDisableColon);
 
     // 2. Rejestracja zadania szybkiego skanowania dotyku (Priorytet 4)
-    xTaskCreate(vTaskTouch, "vTaskTouch", 4096, NULL, 4, &hTaskTouch);
+    xTaskCreate(vTaskTouch, "vTaskTouch", 8192, NULL, 4, &hTaskTouch);
 
-    xTaskCreate(vTaskMenuEngine, "vTaskMenuEngine", 4096, NULL, 4, &hTaskMenuEngine);
+    xTaskCreate(vTaskMenuEngine, "vTaskMenuEngine", 8192, NULL, 4, &hTaskMenuEngine);
 
     printf("[LOG] Podsystem RTC: Zadania mrugania i dotyku zostały pomyślnie zarejestrowane.\n");
 
@@ -518,6 +537,7 @@ void init_RTC_subsystem(void)
         vTaskDelay(pdMS_TO_TICKS(50));
     }
     set_brightness(start_br);
+    vTaskResume(hTaskDisableColon);
 }
 //=====================================================================================================
 //=====================================================================================================
@@ -613,11 +633,24 @@ void print_RTC(void)
     //****************************************************************************************** */
     flush_screen_vsync();
     xSemaphoreGive(fb_mutex);
-    // 6. Wybudzamy task gaszenia dwukropka (który po 500 ms tylko go zamaluje na czarno)
-    if (hTaskDisableColon != NULL)
+    static int last_triggered_min = -1;
+
+    if (g_slide_enabled && !is_editing_time && dane_czasu.tm_sec == 20)
     {
-        xTaskNotifyGive(hTaskDisableColon);
+        if ((dane_czasu.tm_min % g_slide_interval == 0) && (dane_czasu.tm_min != last_triggered_min))
+        {
+            last_triggered_min = dane_czasu.tm_min;
+            g_trigger_auto_photo = true;
+        }
     }
+    if (dane_czasu.tm_sec != 20)
+    {
+        last_triggered_min = -1; // Reset blokady po minięciu 20. sekundy
+    }
+
+    // 6. Wybudzamy task gaszenia dwukropka (który po 500 ms tylko go zamaluje na czarno)
+    xTaskNotifyGive(hTaskDisableColon);
+
     // rtc_end = esp_timer_get_time();
     // printf("[PROFILER] RENDER RTC (print_RTC) zajął: %llu us\n", (rtc_end - rtc_start));
 }
@@ -1186,9 +1219,20 @@ void save_brightness_to_NVS(uint8_t day_val, uint8_t night_val)
     nvs_handle_t my_handle;
     if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK)
     {
-        nvs_set_u8(my_handle, "bl_light", day_val);
-        nvs_set_u8(my_handle, "bl_night", night_val);
-        nvs_commit(my_handle);
+        uint8_t old_d = 255, old_n = 255;
+        bool dirty = false;
+        if (nvs_get_u8(my_handle, "bl_light", &old_d) != ESP_OK || old_d != day_val)
+        {
+            nvs_set_u8(my_handle, "bl_light", day_val);
+            dirty = true;
+        }
+        if (nvs_get_u8(my_handle, "bl_night", &old_n) != ESP_OK || old_n != night_val)
+        {
+            nvs_set_u8(my_handle, "bl_night", night_val);
+            dirty = true;
+        }
+        if (dirty)
+            nvs_commit(my_handle);
         nvs_close(my_handle);
     }
 }
@@ -1290,17 +1334,7 @@ void init_spiffs_storage(void)
 //=====================================================================================================
 //=====================================================================================================
 //=====================================================================================================
-void vTaskAutoPhotoTimer(void *pvParameters)
-{
-    printf("[SYSTEM] Zadanie auto-foto co 5 minut wystartovalo.\n");
-    while (1)
-    {
-        vTaskDelay(pdMS_TO_TICKS(5 * 60 * 1000));
-        // vTaskDelay(pdMS_TO_TICKS(15 * 1000));
-        g_trigger_auto_photo = true;
-        printf("[TIMER] Minelo 5 minut! Wyzwalam pokaz zdjecia.\n");
-    }
-}
+
 //=====================================================================================================
 //=====================================================================================================
 //=====================================================================================================
@@ -1806,12 +1840,16 @@ void refresh_menu_self(void)
     xSemaphoreTake(fb_mutex, portMAX_DELAY);
     memset(back_buffer, 0x00, 800 * 1280 * 2);
 
-    // Rysowanie ramki i napisu PAINT na środku ekranu
-    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 390, 335, 500, 130, 4, 0xFFE0);
-    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "PAINT", 505, 345, 100.0f, 0xFFE0);
+    // Rysowanie ramki i napisu PAINT na środku ekranu X-320 Y+20
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 70, 315, 500, 130, 4, 0xFFE0);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "PAINT", 205, 325, 100.0f, 0xFFE0);
+
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 710, 315, 500, 130, 4, 0xFFE0);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "SLIDE", 845, 325, 100.0f, 0xFFE0);
 
     draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 70, 140, 500, 120, 4, 0x07E0);
     draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "NTP", 250, 145, 100.0f, 0x07E0);
+
     draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 710, 140, 500, 120, 4, 0xF100);
     draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "DEMO", 870, 145, 100.0f, 0xF100);
 
@@ -1828,30 +1866,18 @@ void refresh_menu_self(void)
 }
 void set_ntp_and_demo_menu(void)
 {
-    // uint16_t old_tx = 9999, old_ty = 9999;
     bool exit_menu = false;
 
     refresh_menu_self();
     vTaskDelay(pdMS_TO_TICKS(300));
     global_is_touched = false;
 
-    if (hTaskHardwareTouchDriver != NULL)
-    {
-        vTaskResume(hTaskHardwareTouchDriver);
-    }
+    vTaskResume(hTaskHardwareTouchDriver);
+
     while (!exit_menu)
     {
         uint16_t tx = global_touchX, ty = global_touchY;
-        // if (global_is_touched && (tx != old_tx || ty != old_ty))
-        // {
-        //     old_tx = tx;
-        //     old_ty = ty;
-        //     xSemaphoreTake(fb_mutex, portMAX_DELAY);
-        //     // draw_rectangle_90(menu_buffer, LCD_H_RES, LCD_V_RES, 10, 10, 300, 35, 0x0000);
-        //     // show_debug_touch(tx, ty);
-        //     flush_screen_vsync();
-        //     xSemaphoreGive(fb_mutex);
-        // }
+
         if (global_is_touched)
         {
             // Obsluga przycisku NTP (lewa gorna cwiartka)
@@ -1878,8 +1904,15 @@ void set_ntp_and_demo_menu(void)
                 exit_menu = true;
             }
 
+            // 5. SLIDE
+            if (tx >= 355 && tx <= 485 && ty >= 710 && ty <= 1210)
+            {
+                printf("[MENU NTP/DEMO] -> Wybrano SLIDE\n");
+                set_slide_menu();
+                refresh_menu_self();
+            }
             // 5. PAINT --- HIT-BOX dla przycisku PAINT (X=440..840, Y=330..450 -> Touch Y=440..840, X=350..470)
-            if (tx >= 335 && tx <= 465 && ty >= 390 && ty <= 890)
+            if (tx >= 355 && tx <= 485 && ty >= 70 && ty <= 570)
             {
                 printf("[MENU NTP/DEMO] -> Wybrano PAINT\n");
                 run_paint_menu();
@@ -2180,19 +2213,169 @@ void flush_screen_vsync(void)
     active_fb_idx = next_idx;
     back_buffer = (uint16_t *)fbs[1 - active_fb_idx];
 }
-
 //=====================================================================================================
 //=====================================================================================================
 //=====================================================================================================
-
+void save_slide_settings_to_NVS(void)
+{
+    nvs_handle_t my_handle;
+    if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK)
+    {
+        uint8_t en = g_slide_enabled ? 1 : 0, old_v = 255;
+        bool dirty = false;
+        if (nvs_get_u8(my_handle, "slide_en", &old_v) != ESP_OK || old_v != en)
+        {
+            nvs_set_u8(my_handle, "slide_en", en);
+            dirty = true;
+        }
+        if (nvs_get_u8(my_handle, "slide_int", &old_v) != ESP_OK || old_v != g_slide_interval)
+        {
+            nvs_set_u8(my_handle, "slide_int", g_slide_interval);
+            dirty = true;
+        }
+        if (nvs_get_u8(my_handle, "slide_cnt", &old_v) != ESP_OK || old_v != g_slide_photo_count)
+        {
+            nvs_set_u8(my_handle, "slide_cnt", g_slide_photo_count);
+            dirty = true;
+        }
+        if (dirty)
+            nvs_commit(my_handle);
+        nvs_close(my_handle);
+    }
+}
 //=====================================================================================================
 //=====================================================================================================
 //=====================================================================================================
-
+void load_slide_settings_from_NVS(void)
+{
+    nvs_handle_t my_handle;
+    if (nvs_open("storage", NVS_READONLY, &my_handle) == ESP_OK)
+    {
+        uint8_t en = 1, inter = 5, cnt = 10;
+        if (nvs_get_u8(my_handle, "slide_en", &en) == ESP_OK)
+            g_slide_enabled = (en != 0);
+        if (nvs_get_u8(my_handle, "slide_int", &inter) == ESP_OK)
+            g_slide_interval = inter;
+        if (nvs_get_u8(my_handle, "slide_cnt", &cnt) == ESP_OK)
+            g_slide_photo_count = cnt;
+        nvs_close(my_handle);
+    }
+}
 //=====================================================================================================
 //=====================================================================================================
 //=====================================================================================================
-
+void draw_slide_menu_screen(void)
+{
+    char buf[32];
+    xSemaphoreTake(fb_mutex, portMAX_DELAY);
+    safe_clear_screen(back_buffer, 0x0000);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "SLIDE SHOW SETTINGS", 310, 20, 65.0f, 0x07FF);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "AUTO SLIDE:", 100, 125, 55.0f, 0xFFFF);
+    uint16_t en_color = g_slide_enabled ? 0x07E0 : 0xF800;
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 750, 110, 400, 90, 4, en_color);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, g_slide_enabled ? "YES" : "NO", g_slide_enabled ? 895 : 915, 125, 60.0f, en_color);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "PHOTOS COUNT:", 100, 265, 55.0f, 0xFFFF);
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 750, 250, 100, 90, 4, 0xFFFF);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "-", 788, 265, 65.0f, 0xFFFF);
+    snprintf(buf, sizeof(buf), "%d", g_slide_photo_count);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, buf, (g_slide_photo_count >= 10) ? 915 : 932, 265, 65.0f, 0xFFE0);
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 1050, 250, 100, 90, 4, 0xFFFF);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "+", 1085, 265, 65.0f, 0xFFFF);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "INTERVAL:", 100, 405, 55.0f, 0xFFFF);
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 750, 390, 400, 90, 4, 0x07FF);
+    snprintf(buf, sizeof(buf), "%d MIN", g_slide_interval);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, buf, (g_slide_interval >= 10) ? 865 : 885, 405, 60.0f, 0x07FF);
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 100, 580, 480, 110, 4, 0xFFE0);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "SHOW PHOTOS", 175, 605, 60.0f, 0xFFE0);
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 700, 580, 450, 110, 4, 0x07E0);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "DONE", 850, 605, 65.0f, 0x07E0);
+    flush_screen_vsync();
+    xSemaphoreGive(fb_mutex);
+}
+//=====================================================================================================
+//=====================================================================================================
+//=====================================================================================================
+void set_slide_menu(void)
+{
+    draw_slide_menu_screen();
+    wait_for_release();
+    vTaskDelay(pdMS_TO_TICKS(50));
+    while (1)
+    {
+        if (global_is_touched)
+        {
+            uint16_t tx = global_touchX, ty = global_touchY;
+            if (tx >= 600 && tx <= 690 && ty >= 750 && ty <= 1150)
+            {
+                g_slide_enabled = !g_slide_enabled;
+                draw_slide_menu_screen();
+            }
+            else if (tx >= 460 && tx <= 550 && ty >= 750 && ty <= 850)
+            {
+                if (g_slide_photo_count > 1)
+                    g_slide_photo_count--;
+                draw_slide_menu_screen();
+            }
+            else if (tx >= 460 && tx <= 550 && ty >= 1050 && ty <= 1150)
+            {
+                if (g_slide_photo_count < 99)
+                    g_slide_photo_count++;
+                draw_slide_menu_screen();
+            }
+            else if (tx >= 320 && tx <= 410 && ty >= 750 && ty <= 1150)
+            {
+                int idx = 0;
+                for (int i = 0; i < SLIDE_INTERVALS_COUNT; i++)
+                {
+                    if (SLIDE_INTERVALS[i] == g_slide_interval)
+                    {
+                        idx = (i + 1) % SLIDE_INTERVALS_COUNT;
+                        break;
+                    }
+                }
+                g_slide_interval = SLIDE_INTERVALS[idx];
+                draw_slide_menu_screen();
+            }
+            else if (tx >= 110 && tx <= 220 && ty >= 100 && ty <= 580)
+            {
+                set_max_briggtness();
+                show_all_photos_manual();
+                apply_scheduled_brightness(dane_czasu.tm_hour, true);
+            }
+            else if (tx >= 110 && tx <= 220 && ty >= 700 && ty <= 1150)
+            {
+                save_slide_settings_to_NVS();
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    wait_for_release();
+    vTaskDelay(pdMS_TO_TICKS(150));
+}
+//=====================================================================================================
+//=====================================================================================================
+//=====================================================================================================
+void show_all_photos_manual(void)
+{
+    // uint8_t target_br = (dane_czasu.tm_hour >= 20 || dane_czasu.tm_hour < 6) ? BRIGHTNESS_NIGHT : BRIGHTNESS;
+    //  set_brightness(target_br);
+    for (int idx = 1; idx <= g_slide_photo_count; idx++)
+    {
+        char path[32];
+        snprintf(path, sizeof(path), "/spiffs/FOTO%d.jpg", idx);
+        struct stat st;
+        if (stat(path, &st) != 0)
+            break;
+        wyswietl_jpeg_ze_spiffs(path);
+        wait_for_release();
+        while (!global_is_touched)
+            vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    wait_for_release();
+    draw_slide_menu_screen();
+}
 //=====================================================================================================
 //=====================================================================================================
 //=====================================================================================================
