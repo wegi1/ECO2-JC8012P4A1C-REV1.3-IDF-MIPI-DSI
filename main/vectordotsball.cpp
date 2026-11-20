@@ -15,10 +15,16 @@
 #include "esp_heap_caps.h"
 #include "jd9365_lcd.h"
 #include "esp_timer.h"
+//==========================
+
+#define REFRESH_RATE 60.0f
+#define FRAME_TIME_US (1000000.0f / REFRESH_RATE)
 //==========================================================
 // Zasoby zdefiniowane w main.cpp
 extern jd9365_lcd lcd;
 extern uint16_t *fbs[2];
+extern uint16_t *back_buffer;
+
 extern SemaphoreHandle_t vsync_sem;
 
 // Zasoby zdefiniowane w RTC.cpp
@@ -117,6 +123,9 @@ static uint8_t zoom_side = 0x01;
 static uint8_t zoom = 128; // 128;
 static uint32_t frames = 0;
 
+static uint16_t angle_x = 0x00;
+static uint16_t angle_y = 0x00;
+static uint16_t angle_z = 0x00;
 //=========================================================================================================================================
 
 //=============================================
@@ -156,8 +165,8 @@ static void zoom_manage(void)
 void start_vectordots_ball(void)
 {
     xSemaphoreTake(fb_mutex, portMAX_DELAY);
-    FRAME_ADDRESS = (uint32_t)fbs[0];
-    FRAME_2_ADDRESS = (uint32_t)fbs[1];
+    FRAME_ADDRESS = (uint32_t)fbs[active_fb_idx];
+    FRAME_2_ADDRESS = (uint32_t)fbs[1 - active_fb_idx];
 
     if (multable == nullptr)
     {
@@ -180,7 +189,7 @@ void start_vectordots_ball(void)
     demo_exit_requested = false;
 
     // clear both framebuffers
-    for (i = 0; i < (800 * 1280 / 2); i++)
+    for (i = 0; i < (screen_X * screen_Y / 2); i++)
     {
         pFBaddr[i] = 0;
         pFBaddr2[i] = 0;
@@ -191,8 +200,15 @@ void start_vectordots_ball(void)
     // SYNCHRONIZACJA Z DMA
     xSemaphoreTake(vsync_sem, 0);
     xSemaphoreTake(vsync_sem, portMAX_DELAY);
-    // uint32_t fps_counter = 0;
-    // int64_t t_start = esp_timer_get_time();
+    uint32_t fps_counter = 0;
+    int64_t t_start_x = esp_timer_get_time();
+    int64_t elapsed_us = 0;
+    float real_fps = 0;
+
+    int64_t t_start, sum_flush = 0;
+    uint32_t samples = 0;
+    int64_t sum_clear = 0, sum_calc = 0, sum_draw = 0;
+
     while (1)
     {
         //---
@@ -201,76 +217,145 @@ void start_vectordots_ball(void)
 
         // --- CLEAR OLD PLOTS IN THE 2ND BUFFER WHICH IS NO INVISIBLE ---
         // --- AND CACHE FLUSH
+        t_start = esp_timer_get_time();
         for (i = 0; i < pl02_calc; i++)
         {
             *(uint16_t *)(plots02[i]) = 0x0000;
-            esp_cache_msync((void *)(plots02[i] & ~63U), 64, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
         }
+        sum_clear += (esp_timer_get_time() - t_start);
 
+        t_start = esp_timer_get_time();
         calculate_matrix();
         calculate_8_dots();
-        calc_all_dots_01(); // store plots values in first buffer
+        calc_all_dots_01();
+        sum_calc += (esp_timer_get_time() - t_start);
 
+        t_start = esp_timer_get_time();
         for (i = 0; i < pl02_calc; i++)
         {
             *(uint16_t *)(plots02[i]) = 0xFFFF;
-            esp_cache_msync((void *)(plots02[i] & ~63U), 64, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
         }
+        sum_draw += (esp_timer_get_time() - t_start);
+        t_start = esp_timer_get_time();
+        uint8_t next_idx = 1 - active_fb_idx;
+        esp_cache_msync((void *)fbs[next_idx], screen_X * screen_Y * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        sum_flush += (esp_timer_get_time() - t_start);
 
-        if (demo_exit_requested == true)
-        {
-            for (i = 0; i < (800 * 1280 / 2); i++)
-            {
-                pFBaddr[i] = 0; // czyścimy pierwszy bufor fbs na czarno
-            }
-            esp_cache_msync((void *)FRAME_ADDRESS, 800 * 1280 * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-            xSemaphoreTake(vsync_sem, portMAX_DELAY);
-            lcd.lcd_draw_bitmap(0, 0, 800, 1280, (uint8_t *)FRAME_ADDRESS);
-            xSemaphoreTake(vsync_sem, portMAX_DELAY);
-            wait_for_release();
-            restore_brightness();
-            active_fb_idx = 0;
-
-            xSemaphoreGive(fb_mutex);
-            refresh_menu_self();
-            return;
-        }
-
-        lcd.lcd_draw_bitmap(0, 0, 800, 1280, (uint8_t *)FRAME_2_ADDRESS);
+        samples++;
+        lcd.lcd_draw_bitmap(0, 0, screen_X, screen_Y, (uint8_t *)fbs[next_idx]);
         xSemaphoreTake(vsync_sem, portMAX_DELAY);
+        active_fb_idx = next_idx;
+
         //---
         zoom_manage();
         //---
 
         // --- CLEAR OLD PLOTS IN THE 1st BUFFER WHICH IS NO INVISIBLE ---
         // --- AND CACHE FLUSH
+        t_start = esp_timer_get_time();
         for (i = 0; i < pl01_calc; i++)
         {
             *(uint16_t *)(plots01[i]) = 0x0000;
-            esp_cache_msync((void *)(plots01[i] & ~63U), 64, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
         }
+        sum_clear += (esp_timer_get_time() - t_start);
 
+        t_start = esp_timer_get_time();
         calculate_matrix();
         calculate_8_dots();
-        // store plots values in first buffer
         calc_all_dots_02();
+        sum_calc += (esp_timer_get_time() - t_start);
+
+        t_start = esp_timer_get_time();
         for (i = 0; i < pl01_calc; i++)
         {
             *(uint16_t *)(plots01[i]) = 0xFFFF;
-            esp_cache_msync((void *)(plots01[i] & ~63U), 64, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        }
+        sum_draw += (esp_timer_get_time() - t_start);
+
+        t_start = esp_timer_get_time();
+        next_idx = 1 - active_fb_idx;
+        esp_cache_msync((void *)fbs[next_idx], screen_X * screen_Y * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        sum_flush += (esp_timer_get_time() - t_start);
+
+        samples++;
+        lcd.lcd_draw_bitmap(0, 0, screen_X, screen_Y, (uint8_t *)fbs[next_idx]);
+        xSemaphoreTake(vsync_sem, portMAX_DELAY);
+        active_fb_idx = next_idx;
+
+        // ===== WAIT KEY ====
+        if (demo_exit_requested == true)
+        {
+            uint32_t *pClear = (uint32_t *)fbs[1 - active_fb_idx];
+            for (i = 0; i < (screen_X * screen_Y / 2); i++)
+            {
+                pClear[i] = 0;
+            }
+
+            esp_cache_msync((void *)fbs[1 - active_fb_idx], screen_X * screen_Y * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+            xSemaphoreTake(vsync_sem, portMAX_DELAY);
+            lcd.lcd_draw_bitmap(0, 0, screen_X, screen_Y, (uint8_t *)fbs[1 - active_fb_idx]);
+            active_fb_idx = 1 - active_fb_idx;
+
+            pClear = (uint32_t *)fbs[1 - active_fb_idx];
+            for (i = 0; i < (screen_X * screen_Y / 2); i++)
+            {
+                pClear[i] = 0;
+            }
+
+            esp_cache_msync((void *)fbs[1 - active_fb_idx], screen_X * screen_Y * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+            xSemaphoreTake(vsync_sem, portMAX_DELAY);
+            wait_for_release();
+            restore_brightness();
+
+            if (samples > 0)
+            {
+                float avg_clear = (float)sum_clear / samples;
+                float avg_calc = (float)sum_calc / samples;
+                float avg_draw = (float)sum_draw / samples;
+                float avg_flush = (float)sum_flush / samples;
+                float avg_total = avg_clear + avg_calc + avg_draw + avg_flush;
+
+                printf("==================================================\n");
+                printf(" VECTORDOTSBALL BENCHMARK @ %.1f Hz (Frame: %.1f us)\n", REFRESH_RATE, FRAME_TIME_US);
+                printf("==================================================\n");
+                printf("1. CLEAR AVG : %6.1f us (%5.2f%% ramki)\n", avg_clear, (avg_clear / FRAME_TIME_US) * 100.0f);
+                printf("2. CALC  AVG : %6.1f us (%5.2f%% ramki)\n", avg_calc, (avg_calc / FRAME_TIME_US) * 100.0f);
+                printf("3. DRAW  AVG : %6.1f us (%5.2f%% ramki)\n", avg_draw, (avg_draw / FRAME_TIME_US) * 100.0f);
+                printf("4. MSYNC AVG : %6.1f us (%5.2f%% ramki)\n", avg_flush, (avg_flush / FRAME_TIME_US) * 100.0f);
+                printf("--------------------------------------------------\n");
+                printf("5. TOTAL AVG : %6.1f us (%5.2f%% ramki)\n", avg_total, (avg_total / FRAME_TIME_US) * 100.0f);
+                printf("6. FRAMES    : %" PRIu32 "\n", samples);
+                printf("==================================================\n");
+                if (elapsed_us > 0)
+                {
+                    real_fps = (120.0f * 1000000.0f) / elapsed_us;
+                    printf("[DEMO_BENCH] 120 ramek w %lld ms -> Realny FPS: %.2f\n", elapsed_us / 1000, real_fps);
+                }
+            }
+
+            zoom_scale = zooming;
+            zoom_side = 0x01;
+            frames = 0;
+            pl01_calc = 1;
+            pl02_calc = 1;
+            angle_x = 0x00;
+            angle_y = 0x00;
+            angle_z = 0x00;
+
+            back_buffer = fbs[1 - active_fb_idx]; // <--- przywraca bufor dla menu w RTC.cpp
+
+            xSemaphoreGive(fb_mutex);
+            refresh_menu_self();
+            return;
         }
 
-        lcd.lcd_draw_bitmap(0, 0, 800, 1280, (uint8_t *)FRAME_ADDRESS);
-        xSemaphoreTake(vsync_sem, portMAX_DELAY);
-        // fps_counter += 2; // bo w jednym obiegu while rysujesz 2 klatki
-        // if (fps_counter >= 120)
-        // {
-        //     int64_t elapsed_us = esp_timer_get_time() - t_start;
-        //     float real_fps = (120.0f * 1000000.0f) / elapsed_us;
-        //     // printf("[DEMO_BENCH] 120 ramek w %lld ms -> Realny FPS: %.2f\n", elapsed_us / 1000, real_fps);
-        //     fps_counter = 0;
-        //     t_start = esp_timer_get_time();
-        // }
+        fps_counter += 2; // bo w jednym obiegu while rysujesz 2 klatki
+        if (fps_counter >= 120)
+        {
+            elapsed_us = esp_timer_get_time() - t_start_x;
+            fps_counter = 0;
+            t_start_x = esp_timer_get_time();
+        }
     }
 }
 //=======================================================================
@@ -366,10 +451,6 @@ void calculate_matrix()
     static uint16_t delta_x = 0x0060 * 2;
     static uint16_t delta_y = 0x0080 * 2;
     static uint16_t delta_z = 0x0040 * 2;
-
-    static uint16_t angle_x = 0x00;
-    static uint16_t angle_y = 0x00;
-    static uint16_t angle_z = 0x00;
 
     static uint8_t sx;
     static uint8_t sy;
@@ -479,8 +560,9 @@ void calc_all_dots_01(void)
         {
             helper_y = plot_16Y - y_offset;
             helper_x = plot_16X - x_offset;
-            //        plots02[pl01_calc] = (FRAME_ADDRESS + (2*((helper_y * screen_X)+ helper_x ))) ;
-            plots02[pl02_calc] = ((FRAME_2_ADDRESS) + (((helper_y * screen_X) + helper_x) << 1));
+            // plots02[pl02_calc] = ((FRAME_2_ADDRESS) + (((helper_y * screen_X) + helper_x) << 1));
+            plots02[pl02_calc] = ((uint32_t)fbs[1 - active_fb_idx] + (((helper_y * screen_X) + helper_x) << 1));
+
             pl02_calc++;
         }
     }
@@ -540,8 +622,9 @@ void calc_all_dots_02(void)
         {
             helper_y = plot_16Y - y_offset;
             helper_x = plot_16X - x_offset;
-            //        plots01[pl01_calc] = (FRAME_ADDRESS + (2*((helper_y * screen_X)+ helper_x ))) ;
-            plots01[pl01_calc] = (FRAME_ADDRESS + (((helper_y * screen_X) + helper_x) << 1));
+            // plots01[pl01_calc] = (FRAME_ADDRESS + (((helper_y * screen_X) + helper_x) << 1));
+            plots01[pl01_calc] = ((uint32_t)fbs[1 - active_fb_idx] + (((helper_y * screen_X) + helper_x) << 1));
+
             pl01_calc++;
         }
     }

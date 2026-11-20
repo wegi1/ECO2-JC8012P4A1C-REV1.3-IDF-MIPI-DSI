@@ -139,8 +139,9 @@ extern "C" void app_main(void)
     init_NVS_system(); // Inicjalizacja flasha pod NVS
     BRIGHTNESS = load_brightness_from_NVS(&BRIGHTNESS_NIGHT);
     // Polska strefa czasowa (automatyczna zmiana czasu letniego/zimowego)
-    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
-    tzset();
+    // setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+    // tzset();
+    load_location_prefs_from_NVS();
 
     printf("[MEM_0] Przed LCD: %u KB wolnego\n", heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
     lcd.begin();

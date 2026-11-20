@@ -224,12 +224,17 @@ void vTaskNtpSyncWorker(void *pvParameters)
                 rtc_time.year = timeinfo.tm_year + 1900;
                 rtc_time.weekday = timeinfo.tm_wday;
 
-                esp_err_t set_res = ESP_FAIL;
-                if (i2c_mutex != NULL && xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                esp_err_t set_res = ESP_ERR_TIMEOUT;
+                if (i2c_mutex != NULL && xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(1000)) == pdTRUE)
                 {
                     set_res = rx8025t_set_time(&rtc_time);
                     xSemaphoreGive(i2c_mutex);
                 }
+                else
+                {
+                    ESP_LOGE(TAG, "Timeout oczekiwania na i2c_mutex przed zapisem do RX8025T!");
+                }
+
                 if (set_res == ESP_OK)
 
                 {
@@ -241,7 +246,8 @@ void vTaskNtpSyncWorker(void *pvParameters)
                 }
                 else
                 {
-                    ESP_LOGE(TAG, "Blad zapisu czasu NTP do RX8025T!");
+                    // ESP_LOGE(TAG, "Blad zapisu czasu NTP do RX8025T!");
+                    ESP_LOGE(TAG, "Blad zapisu czasu NTP do RX8025T! set_res=%s (mutex=%p)", esp_err_to_name(set_res), i2c_mutex);
                 }
             }
             else
@@ -343,32 +349,87 @@ bool ensure_wifi_stack_initialized(void)
 static char s_weather_rx_buf[1024];
 static int s_weather_rx_len = 0;
 
+#include "nvs_flash.h"
+#include "nvs.h"
+
+const LocationPreset LOCATIONS[3] = {
+    //                   setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+    {"BYDGOSZCZ", 53.1200f, 18.0100f, "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"LONDYN", 51.5074f, -0.1278f, "GMT0BST,M3.5.0/1,M10.5.0"},
+    {"PAKISTAN", 33.6844f, 73.0479f, "PKT-5"}};
+
+// Domyślne wartości w RAM (0 = Bydgoszcz)
+volatile uint8_t g_weather_loc_idx = 0;
+volatile uint8_t g_tz_loc_idx = 0;
+
+void apply_timezone_by_idx(uint8_t idx)
+{
+    if (idx > 2)
+        idx = 0;
+    setenv("TZ", LOCATIONS[idx].tz, 1);
+    tzset();
+    ESP_LOGI(TAG, "Ustawiono strefe czasowa: %s (%s)", LOCATIONS[idx].name, LOCATIONS[idx].tz);
+}
+
+void load_location_prefs_from_NVS(void)
+{
+    nvs_handle_t h;
+    uint8_t w_idx = 0, t_idx = 0;
+    if (nvs_open("storage", NVS_READONLY, &h) == ESP_OK)
+    {
+        if (nvs_get_u8(h, "w_loc", &w_idx) == ESP_OK && w_idx < 3)
+            g_weather_loc_idx = w_idx;
+        if (nvs_get_u8(h, "tz_loc", &t_idx) == ESP_OK && t_idx < 3)
+            g_tz_loc_idx = t_idx;
+        nvs_close(h);
+    }
+    apply_timezone_by_idx(g_tz_loc_idx);
+}
+
+void save_location_prefs_to_NVS(uint8_t weather_idx, uint8_t tz_idx)
+{
+    if (weather_idx > 2)
+        weather_idx = 0;
+    if (tz_idx > 2)
+        tz_idx = 0;
+    g_weather_loc_idx = weather_idx;
+    g_tz_loc_idx = tz_idx;
+
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK)
+    {
+        uint8_t old_w = 255, old_tz = 255;
+        bool dirty = false;
+
+        if (nvs_get_u8(h, "w_loc", &old_w) != ESP_OK || old_w != weather_idx)
+        {
+            nvs_set_u8(h, "w_loc", weather_idx);
+            dirty = true;
+            FILE *f = fopen("/spiffs/weather.ini", "w");
+            if (f != NULL)
+            {
+                fprintf(f, "lat=%.4f\nlon=%.4f\n", LOCATIONS[weather_idx].lat, LOCATIONS[weather_idx].lon);
+                fclose(f);
+            }
+        }
+        if (nvs_get_u8(h, "tz_loc", &old_tz) != ESP_OK || old_tz != tz_idx)
+        {
+            nvs_set_u8(h, "tz_loc", tz_idx);
+            dirty = true;
+        }
+        if (dirty)
+            nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+// Zastąp dotychczasową funkcję load_weather_coords_from_spiffs tą wersją (czyta prosto z RAM):
 static void load_weather_coords_from_spiffs(float *lat, float *lon)
 {
-    *lat = 53.12f; // Domyslny fallback: Bydgoszcz
-    *lon = 18.01f;
-
-    FILE *f = fopen("/spiffs/weather.ini", "r");
-    if (f == NULL)
-    {
-        ESP_LOGW(TAG, "Brak /spiffs/weather.ini - uzywam Bydgoszczy (53.12, 18.01)");
-        return;
-    }
-
-    char line[64];
-    while (fgets(line, sizeof(line), f) != NULL)
-    {
-        if (strncmp(line, "lat=", 4) == 0)
-        {
-            *lat = strtof(line + 4, NULL);
-        }
-        else if (strncmp(line, "lon=", 4) == 0)
-        {
-            *lon = strtof(line + 4, NULL);
-        }
-    }
-    fclose(f);
-    ESP_LOGI(TAG, "Wspolrzedne pogody: lat=%.4f, lon=%.4f", *lat, *lon);
+    uint8_t idx = (g_weather_loc_idx < 3) ? g_weather_loc_idx : 0;
+    *lat = LOCATIONS[idx].lat;
+    *lon = LOCATIONS[idx].lon;
+    ESP_LOGI(TAG, "Pogoda dla [%s]: lat=%.4f, lon=%.4f", LOCATIONS[idx].name, *lat, *lon);
 }
 
 static esp_err_t weather_http_event_handler(esp_http_client_event_t *evt)

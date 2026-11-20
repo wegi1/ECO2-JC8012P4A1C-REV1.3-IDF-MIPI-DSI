@@ -98,7 +98,20 @@ uint8_t g_slide_interval = 5;    // 5, 10, 15, 20, 30, 60 min
 uint8_t g_slide_photo_count = 2; // Ile zdjęć brać do rotacji (1..max)
 static const uint8_t SLIDE_INTERVALS[] = {5, 10, 15, 20, 30, 60};
 static const int SLIDE_INTERVALS_COUNT = 6;
-
+//=====================================================================================================
+//=====================================================================================================
+//=====================================================================================================
+static void draw_ntp_loc_and_tz_buttons(void)
+{
+    draw_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 15, 105, 360, 145, 0x0000);
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 20, 110, 350, 135, 4, 0xFFE0);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, LOCATIONS[g_weather_loc_idx].name, 90, 145, 55.0f, 0xFFE0);
+    char tz_buf[24];
+    snprintf(tz_buf, sizeof(tz_buf), "TZ: %s", LOCATIONS[g_tz_loc_idx].name);
+    draw_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 905, 105, 360, 145, 0x0000);
+    draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 910, 110, 350, 135, 4, 0x07E0);
+    draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, tz_buf, 935, 145, 50.0f, 0x07E0);
+}
 //=====================================================================================================
 //=====================================================================================================
 //=====================================================================================================
@@ -1689,6 +1702,7 @@ void set_ntp_menu(void)
     // przycisk get temp
     draw_hollow_rectangle_90(back_buffer, LCD_H_RES, LCD_V_RES, 390, 110, 500, 135, 4, 0x07FF);
     draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "GET TEMP", 445, 120, 100.0f, 0x07FF);
+    draw_ntp_loc_and_tz_buttons();
 
     // 4. To ZOSTAJE: Przycisk DONE (Ramka i napis) - użytkownik musi jakoś wyjść z menu
     draw_text_90(back_buffer, LCD_H_RES, LCD_V_RES, "DONE", 510, 580, 150, 0xFFFF);
@@ -1713,6 +1727,26 @@ void set_ntp_menu(void)
         {
             uint16_t tx = global_touchX;
             uint16_t ty = global_touchY;
+            // SET TZ
+            if (tx >= 555 && tx <= 690 && ty >= 20 && ty <= 370)
+            {
+                g_weather_loc_idx = (g_weather_loc_idx + 1) % 3;
+                draw_ntp_loc_and_tz_buttons();
+                flush_screen_vsync();
+                memcpy(back_buffer, (void *)fbs[active_fb_idx], LCD_H_RES * LCD_V_RES * 2);
+                wait_for_release();
+            }
+
+            // SET LOCATION
+            if (tx >= 555 && tx <= 690 && ty >= 910 && ty <= 1260)
+            {
+                g_tz_loc_idx = (g_tz_loc_idx + 1) % 3;
+                apply_timezone_by_idx(g_tz_loc_idx);
+                draw_ntp_loc_and_tz_buttons();
+                flush_screen_vsync();
+                memcpy(back_buffer, (void *)fbs[active_fb_idx], LCD_H_RES * LCD_V_RES * 2);
+                wait_for_release();
+            }
 
             // --- DEBUGER DOTYKU NA EKRANIE ---
             // Czyścimy mały pasek pod cyframi w lewym rogu i rysujemy koordynaty
@@ -1814,7 +1848,9 @@ void set_ntp_menu(void)
             if (tx >= 80 && tx <= 200 && ty >= 400 && ty <= 900)
             {
                 printf("[MENU NTP] -> Kliknięto DONE. Powrót do zegara.\n");
+                save_location_prefs_to_NVS(g_weather_loc_idx, g_tz_loc_idx);
                 wait_for_release(); // Czekamy na puszczenie ekranu przed wyjściem z menu, aby uniknąć natychmiastowego wyzwolenia przycisku
+
                 vTaskDelay(pdMS_TO_TICKS(150));
                 exit_menu = true;
             }
