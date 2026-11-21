@@ -27,5 +27,5 @@ idf_component_register(
         esp_http_server 
         esp_http_client
 )
-
+set_source_files_properties(vectordotsball.cpp PROPERTIES COMPILE_FLAGS "-O3")
 spiffs_create_partition_image(storage "${CMAKE_CURRENT_LIST_DIR}/../FOTOS" FLASH_IN_PROJECT)

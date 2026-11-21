@@ -40,8 +40,12 @@ Create a plain text file named "prefs.ini" inside the FOTOS folder containing tw
 * Compile and flash the device. Once the device boots up for the first time and successfully commits the data to SPIFFS, **comment this line out again** in manin/CmakeLists.txt file [#spiffs_create_partition_image(storage "\${CMAKE_CURRENT_LIST_DIR}/../FOTOS" FLASH_IN_PROJECT)] to avoid redundant Flash cell overwrites on subsequent flashing.
 
 #### ⚙️ Build Optimization Recommendations
-To guarantee native, hardware-level fluidness of the MIPI-DSI bus, eliminate frame tearing, and maintain strict timing for the `vTaskHardwareTouchDriver` background task, **the entire project must be compiled using the `-Og` mode** (Optimization for Debugging) via menuconfig. This mode ensures stable interrupt handling and keeps the rendering engine perfectly synchronized with the display's vertical sync (VSYNC) interrupts.
 
+* **Compiler Optimization (`-O2`):** This project is configured and built with full performance optimization (**`-O2`**, `CONFIG_COMPILER_OPTIMIZATION_PERF=y` in `sdkconfig.defaults`). Any earlier flickering or visual artifacts under `-O2` have been completely eliminated thanks to full hardware-synchronized **double buffering** (`flush_screen_vsync`).
+Additionally, `vectordotsball.cpp` is locally compiled with **`-O3`** in `main/CMakeLists.txt` for maximum 3D rendering throughput.
+
+* **ESP-IDF Version (`v5.5.3`):** This firmware was developed, compiled, and verified exclusively using **ESP-IDF v5.5.3**. Due to rapid changes in MIPI-DSI, PSRAM, and `esp_hosted` drivers across framework releases, there is no guarantee that compiling with any other ESP-IDF version will succeed without modifications.
+ 
 ---
 ## Key Features
 
@@ -95,7 +99,10 @@ dodaj plik tekstowy w folderze FOTOS o nazwie "prefs.ini", a w jego 2 liniach wp
 po kompilacji i sflaszowaniu zakomentuj tą linię krzyżykiem: #spiffs_create_partition_image(storage "\${CMAKE_CURRENT_LIST_DIR}/../FOTOS" FLASH_IN_PROJECT) aby za każdym razem zbędnie nie flaszować partycji SPIFFS
 
 #### ⚙️ Zalecenia dotyczące optymalizacji kompilacji
-Dla zapewnienia idealnej, sprzętowej płynności magistrali MIPI-DSI, braku szarpania klatek oraz stabilnego timingu wątku sprzętowego dotyku `vTaskHardwareTouchDriver`, **cały projekt należy kompilować w trybie `-Og`** (Optimization for Debugging) w menuconfig. Tryb ten zapewnia wzorcową stabilność obsługi przerw oraz pełną synchronizację renderera z przerwaniami pionowymi wyświetlacza (VSYNC).
+* **Optymalizacja kompilatora (`-O2`):** Projekt jest skonfigurowany i budowany z pełną optymalizacją wydajności (**`-O2`**, `CONFIG_COMPILER_OPTIMIZATION_PERF=y` w `sdkconfig.defaults`). Wcześniejszy flickering oraz artefakty obrazu występujące przy `-O2` zostały całkowicie wyeliminowane dzięki pełnemu **podwójnemu buforowaniu (double buffering)** zsynchronizowanemu z VSYNC.
+Dodatkowo plik `vectordotsball.cpp` jest lokalnie kompilowany z flagą **`-O3`** w `main/CMakeLists.txt` dla maksymalnej wydajności renderowania 3D.
+
+* **Wersja ESP-IDF (`v5.5.3`):** Ten program został napisany, skompilowany i przetestowany wyłącznie w wersji **ESP-IDF v5.5.3**. Ze względu na częste zmiany w sterownikach MIPI-DSI, PSRAM oraz `esp_hosted` między wydaniami frameworka, nie ma żadnej gwarancji, że użycie jakiejkolwiek innej wersji ESP-IDF pozwoli na poprawne zbudowanie projektu.
 
 ## Główne funkcje (Key Features)
 
