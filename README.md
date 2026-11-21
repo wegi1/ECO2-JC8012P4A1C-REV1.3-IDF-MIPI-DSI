@@ -1,5 +1,6 @@
 ![Screenshot](/PICTURES/00.jpg) 
 ![Screenshot](/PICTURES/01.jpg) 
+![Screenshot](/PICTURES/01a.jpg) 
 # Project JC8012P4A1 - ESP32-P4 Clock Panel (MIPI-DSI & ESP32-C6)
 
 ---
