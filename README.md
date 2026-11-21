@@ -1,4 +1,5 @@
-![JC8012P4A1_RTC_CLOCK](/PICTURES/clock.jpg)
+![Screenshot](/PICTURES/00.jpg) 
+![Screenshot](/PICTURES/01.jpg) 
 # Project JC8012P4A1 - ESP32-P4 Clock Panel (MIPI-DSI & ESP32-C6)
 
 ---
@@ -107,3 +108,19 @@ Dla zapewnienia idealnej, sprzętowej płynności magistrali MIPI-DSI, braku sza
 * **Testowa aplikacja PAINT:** Dodano wbudowaną testową aplikację do rysowania **PAINT**, demonstrującą responsywność ekranu dotykowego oraz płynność renderowania obrazu.
 
 ---
+![Screenshot](/PICTURES/00.jpg) 
+![Screenshot](/PICTURES/01.jpg) 
+![Screenshot](/PICTURES/01a.jpg) 
+![Screenshot](/PICTURES/02.jpg) 
+![Screenshot](/PICTURES/03.jpg) 
+![Screenshot](/PICTURES/04.jpg) 
+![Screenshot](/PICTURES/05.jpg) 
+![Screenshot](/PICTURES/06.jpg) 
+![Screenshot](/PICTURES/07.jpg) 
+![Screenshot](/PICTURES/08.jpg) 
+![Screenshot](/PICTURES/09.jpg) 
+![Screenshot](/PICTURES/10.jpg) 
+![Screenshot](/PICTURES/11.jpg) 
+![Screenshot](/PICTURES/12.jpg) 
+![Screenshot](/PICTURES/00.jpg) 
+# ---
