@@ -399,7 +399,7 @@ bool ensure_wifi_stack_initialized(void)
             ESP_LOGE(TAG, "Blad esp_wifi_init: %s", esp_err_to_name(err));
             return false;
         }
-        // auto_upgrade_c6_if_needed();
+        auto_upgrade_c6_if_needed();
 
         s_wifi_stack_initialized = true;
     }

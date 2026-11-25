@@ -7,6 +7,11 @@
 
 ## 🇺🇸 English Version
 
+> **ℹ️ Note – ECO2 Version (10") with ESP32-C6 Auto-Upgrade (`C6-AUTO-UPGRADE`)**
+> This branch is intended for the 10-inch **Guition JC8012P4A1C (800×1280)** board featuring the **ESP32-P4 v1.3 (ECO2)** silicon revision and includes automatic firmware upgrade support for the **ESP32-C6** Wi-Fi/BLE coprocessor directly from SPIFFS (`/spiffs/c6_fw.bin`) over the SDIO bus.
+
+---
+
 A low-level, highly optimized framework for a vector clock, TrueType font rendering, and both automatic and manual NTP time synchronization designed for the ESP32-P4 paired with an 800x1280 MIPI-DSI display (Portrait). Networking and coprocessor tasks are offloaded to the ESP32-C6 via a high-speed hardware SDIO bus.
 
 ### 🛠️ Important Instructions Before First Compilation
@@ -60,6 +65,11 @@ Additionally, `vectordotsball.cpp` is locally compiled with **`-O3`** in `main/C
 
 ---
 ## 🇵🇱 Wersja Polska
+
+> **ℹ️ Uwaga – Wersja ECO2 (10") z aktualizacją ESP32-C6 (`C6-AUTO-UPGRADE`)**
+> Ten branch jest przeznaczony dla 10-calowej płytki **Guition JC8012P4A1C (800×1280)** w rewizji krzemu **ESP32-P4 v1.3 (ECO2)** i zawiera funkcję automatycznej aktualizacji firmware'u koprocesora Wi-Fi/BLE **ESP32-C6** bezpośrednio ze SPIFFS (`/spiffs/c6_fw.bin`) po magistrali SDIO.
+
+---
 
 Niskopoziomowy, wysoko zoptymalizowany system operacyjny zegara wektorowego, renderowania grafiki TrueType oraz automatycznej i ręcznej synchronizacji czasu NTP dla układu ESP32-P4 z wyświetlaczem MIPI-DSI 800x1280 (Portrait). Sieć i zadania koprocesora są obsługiwane przez układ ESP32-C6 za pośrednictwem szybkiej magistrali sprzętowej SDIO.
 
