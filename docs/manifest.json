@@ -1,0 +1,16 @@
+{
+  "name": "ESP32-P4 Vector Clock (10.1-inch ECO2)",
+  "version": "1.0",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-P4",
+      "parts": [
+        {
+          "path": "CLOCK_0x00000000_10INCH_ECO2.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}
